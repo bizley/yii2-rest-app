@@ -9,8 +9,13 @@ return [
             'class' => \yii\caching\FileCache::class,
         ],
         'user' => [
-            'identityClass' => 'app\models\User',
-            'enableAutoLogin' => true,
+            'identityClass' => \app\models\User::class,
+            'loginUrl' => null,
+            'enableSession' => false,
+        ],
+        'jwt' => [
+            'class' => \bizley\jwt\Jwt::class,
+            'key' => 'YpudQZvhA53TyBiVChVBLlPyt5Xkv2pOofwvfQz9Vy70BSCL1JqV77NAjuHL'
         ],
         'log' => [
             'traceLevel' => YII_DEBUG ? 3 : 0,

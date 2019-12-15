@@ -55,12 +55,16 @@ but it's enough for Composer to not download them.
 
 Install the framework with
 
-    composer install
+```
+composer install
+```
 
 command run from `app` folder.
 
 > Notice: Yii version in the tutorial is locked as 2.0.30. You can change it in your `composer.json` to `"~2.0.30"` 
 > (mind the tilde `~`) to fetch newer version (if available) with `composer update` command.
+
+> Tip: For Docker setup prepend all commands with `docker-compose exec yii2-rest-api-php`
 
 Creating Database
 -----------------
@@ -130,16 +134,113 @@ in one place and use it later on in another config file without the need to writ
 Creating First Migration
 ------------------------
 
+Run the following console command from `app` folder to create table migration:
 
+```
+vendor/bin/yii migrate/create create_table_user --appconfig=config/console.php
+```
 
+This starts creating [migration](https://www.yiiframework.com/doc/guide/2.0/en/db-migrations) generating process for 
+table named `user` using the configuration from `console.php` file we created step before.  
+After confirming the generation with `yes` you should see new folder named `migrations` in the `app` folder and inside 
+the file named something like `m191215_165033_create_table_user.php` with code:
 
+```php
+<?php
 
+use yii\db\Migration;
 
+/**
+ * Class m191215_165033_create_table_user
+ */
+class m191215_165033_create_table_user extends Migration
+{
+    /**
+     * {@inheritdoc}
+     */
+    public function safeUp()
+    {
+
+    }
+
+    /**
+     * {@inheritdoc}
+     */
+    public function safeDown()
+    {
+        echo "m191215_165033_create_table_user cannot be reverted.\n";
+
+        return false;
+    }
+
+    /*
+    // Use up()/down() to run migration code without a transaction.
+    public function up()
+    {
+
+    }
+
+    public function down()
+    {
+        echo "m191215_165033_create_table_user cannot be reverted.\n";
+
+        return false;
+    }
+    */
+}
+
+```
+
+Update it with the code we need:
+
+```php
+<?php
+
+use yii\db\Migration;
+
+class m191215_165033_create_table_user extends Migration
+{
+    public function safeUp()
+    {
+        $tableOptions = null;
+        if ($this->db->driverName === 'mysql') {
+            $tableOptions = 'CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci ENGINE=InnoDB';
+        }
+        $this->createTable('{{%user}}', [
+            'id' => $this->primaryKey(),
+            'name' => $this->string(191)->notNull()->unique(),
+            'auth_key' => $this->integer()->notNull(),
+            'created_at' => $this->dateTime()->notNull(),
+            'updated_at' => $this->dateTime()->notNull(),
+        ], $tableOptions);
+    }
+
+    public function safeDown()
+    {
+        $this->dropTable('{{%user}}');
+    }
+}
+
+```
+
+Table `user` contains fields:
+- `id` - primary key and user identificator,
+- `name` - user's name, unique among the table rows - maximum is "only" 191 characters because of the character set we 
+  chose - `utf8mb4` - [to support all Unicode characters](https://mathiasbynens.be/notes/mysql-utf8mb4),
+- `auth_key` - number that will be stored in JWT payload for user validation,
+- `created_at` - date of user's creation,
+- `updated_at` - date of user's updating.
+
+Now we can apply that migration with command:
+
+```
+vendor/bin/yii migrate --appconfig=config/console.php
+```
 
 Basic App Configuration
 -----------------------
 
-In the `config` folder create `api.php` file with this code:
+Now let's create proper application configuration. In the `config` folder create `api.php` file with this code:
 
 ```php
 <?php
@@ -206,3 +307,254 @@ or none stack otherwise. Logger will store the information inside the files (Fil
 information marked as `error` or `warning`. You can change these settings later on.  
 Additionally `log` component is added in `bootstrap` section to run it during the 
 [bootstraping process](https://www.yiiframework.com/doc/guide/2.0/en/structure-applications#bootstrap).
+
+Let's not forget about connecting the database - add "require" line in `components` array key for component `db` (just 
+like it was done for `console.php`):
+
+```php
+    'components' => [
+        'db' => require 'db.php',
+    ],
+```
+
+User Model
+----------
+
+Our database already stores the `user` table structure. Now it's time to map it in the application through the 
+[Active Record](https://www.yiiframework.com/doc/guide/2.0/en/db-active-record) object.
+
+Create folder `models` in the `app` folder. Inside it create `User.php` class file.
+
+```php
+<?php
+
+namespace app\models;
+
+use yii\db\ActiveRecord;
+
+/**
+ * @property int $id
+ * @property string $name
+ * @property int $auth_key
+ * @property string $created_at
+ * @property string $updated_at
+ */
+class User extends ActiveRecord
+{
+}
+
+```
+
+We need to "link" this class with proper database name. Although just by naming the model `User` we can be sure that it 
+will automatically map table `user` it's better to make it explicit for future sake. Add this method:
+
+```php
+public static function tableName(): string
+{
+    return '{{%user}}';
+}
+```
+
+There are two date fields in this model - `created_at` and `updated_at`. Since these can be easily filled automatically 
+we can use [behavior](https://www.yiiframework.com/doc/guide/2.0/en/concept-behaviors) to do it for us every time user 
+is created or modified. Add this method:
+
+```php
+public function behaviors(): array
+{
+    return [
+        [
+            'class' => TimestampBehavior::class,
+            'value' => new Expression('NOW()')
+        ]
+    ];
+}
+```
+
+with imports:
+
+```php
+use yii\behaviors\TimestampBehavior;
+use yii\db\Expression;
+```
+
+[TimestampBehavior](https://www.yiiframework.com/doc/guide/2.0/en/concept-behaviors#using-timestamp-behavior) will take 
+care of the fields mentioned before. To make the dates easier to read in database extra config is used there - value of 
+each field will not be the default `TIMESTAMP` integer but rather `DATETIME` string so database expression `NOW()` is 
+used to generate the value.
+
+User Identity
+-------------
+
+We want the `User` model to represent the signed-in user's identity so we need to add few things. First the class must 
+implement `IdentityInterface`.
+
+```php
+use use yii\web\IdentityInterface;
+
+class User extends ActiveRecord implements IdentityInterface
+```
+
+This interface requires few methods to be present so we need to add them.
+
+```php
+public static function findIdentity($id): ?self
+{
+    return static::findOne($id);
+}
+```
+
+This method allows to find user's identity based on its `id`.
+
+```php
+public static function findIdentityByAccessToken($token, $type = null)
+{
+    throw new NotSupportedException('Method findIdentityByAccessToken is not supported.');
+}
+```
+
+This method usually allows to find user's identity based on the given token but in our case we will not use it. Interface 
+still requires it so it's usual thing to throw exception inside for anyone that would try to use it anyway (remember to 
+import the exception in `use yii\base\NotSupportedException;`).
+
+```php
+public function getId(): int
+{
+    return $this->id;
+}
+```
+
+This method return user's identificator. In our case it is unique integer value as set in database.
+
+```php
+public function getAuthKey(): int
+{
+    return $this->auth_key;
+}
+```
+
+This method usually returns authentication key used for automatic cookie login. In our case we will use it to validate 
+user's JWT access token.
+
+```php
+public function validateAuthKey($authKey): bool
+{
+    return $this->auth_key === (int)$authKey;
+}
+```
+
+This is authKey validation itself. Nothing sophisticated, just comparing two numbers.
+
+Methods above are required by the interface but we have got important part to implement as well - password validation. 
+[Users passwords](https://www.yiiframework.com/doc/guide/2.0/en/security-passwords) should always be hashed (don't 
+believe anyone that tells you otherwise) and Yii 2 gives us easy to use `security` component to hash and validate the 
+password.
+
+```php
+public function validatePassword($rawPassword): bool
+{
+    return \Yii::$app->getSecurity()->validatePassword($rawPassword, $this->password);
+}
+``` 
+
+Now we need to configure `user` component. Go back to the `api.php` file in the `config` folder.
+
+```php
+    'components' => [
+        'user' => [
+            'identityClass' => \app\models\User::class,
+            'loginUrl' => null,
+            'enableSession' => false,
+        ],
+    ],
+```
+
+As you can see we tell `user` component that our `User` model is the identity class. Also `loginUrl` and `enableSession` 
+are set to `false` - we are building stateless REST API so these are not needed.
+
+Limiting Users Fields For API
+-----------------------------
+
+By default all the [fields](https://www.yiiframework.com/doc/guide/2.0/en/rest-resources#fields) are returned when calling 
+API for a resource. In case of our `User` we don't want to return password's hash and auth_key so we need to list all 
+the fields that can be safely viewed. Let's add this method in `User` class:
+
+```php
+public function fields(): array
+{
+    return [
+        'id',
+        'name',
+        'createdAt' => 'created_at',
+        'updatedAt' => 'updated_at',
+    ];
+}
+```
+
+Fields `id` and `name` will be returned by their names but we aliased `created_at` and `updated_at` here as `createdAt` 
+and `updatedAt` to comply with [camelCase](https://en.wikipedia.org/wiki/Camel_case) notation. No other field (like 
+`password`) will be returned.
+
+Base API Controller
+-------------------
+
+Create `controllers` folder in the `app`folder. Inside create `UserController.php` class file.
+
+```php
+<?php
+
+namespace app\controllers;
+
+use yii\rest\Controller;
+use yii\rest\OptionsAction;
+
+class UserController extends Controller
+{
+    public function actions(): array
+    {
+        return [
+            'options' => OptionsAction::class,
+        ];
+    }
+}
+
+```
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+Installing And Configuring JWT Component
+----------------------------------------
+
+Run this command from `app` folder:
+
+```
+composer require bizley/jwt:^2.0
+```
+
+When component is installed we need to configure it - go to `api.php` in `config` folder:
+
+```php
+    'components' => [
+        'jwt' => [
+            'class' => \bizley\jwt\Jwt::class,
+            'key' => 'Your Token Key Here'
+        ],
+    ],
+```
+
+Replace `Your Token Key Here` with some random long string. Signature of each token will be checked against it.

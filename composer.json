@@ -1,6 +1,6 @@
 {
   "require": {
-    "yiisoft/yii2": "2.0.30",
+    "yiisoft/yii2": "2.0.38",
     "bizley/jwt": "^2.0"
   },
   "replace": {
